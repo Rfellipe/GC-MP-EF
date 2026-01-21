@@ -10,10 +10,6 @@ export const MP_WEBHOOK_SECRET =
   Deno.env.get("MERCADO_PAGO_WEBHOOK_SECRET") || "";
 
 // Supabase client with service role (bypasses RLS)
-export const supabase = createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { persistSession: false },
-  },
-);
+export const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});

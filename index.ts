@@ -138,10 +138,10 @@ serve(async (req) => {
     }
 
     // =========================================================
-    // 2) subscription_prepapproval (subscription lifecycle)
+    // 2) subscription_preapproval (subscription lifecycle)
     //    Store mapping so renewals know what to apply.
     // =========================================================
-    if (topic === "subscription_prepapproval") {
+    if (topic === "subscription_preapproval") {
       const sub = resource;
       const metadata = sub.metadata || sub?.auto_recurring?.metadata || {};
 

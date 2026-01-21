@@ -23,10 +23,7 @@ function timingSafeEqual(a: string, b: string) {
   return diff === 0;
 }
 
-export async function verifyMercadoPagoSignature(
-  req: Request,
-  dataId: string,
-) {
+export async function verifyMercadoPagoSignature(req: Request, dataId: string) {
   if (!MP_WEBHOOK_SECRET) {
     console.error("MERCADO_PAGO_WEBHOOK_SECRET is not configured");
     return false;
