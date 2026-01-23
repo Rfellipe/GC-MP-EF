@@ -57,3 +57,65 @@ export function mapPaymentMethod(metadataMethod: unknown, payment: any) {
   if (paymentTypeId === "crypto") return "crypto";
   return "card";
 }
+
+export function mapMpSubscriptionStatus(status?: string | null) {
+  const normalized = String(status ?? "").toLowerCase();
+  switch (normalized) {
+    case "authorized":
+    case "approved":
+    case "pending":
+      return "authorized";
+    case "active":
+      return "active";
+    case "cancelled":
+    case "canceled":
+      return "canceled";
+    case "paused":
+    case "expired":
+    case "rejected":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+export function mapAuthorizedPaymentStatusToTransactionStatus(status?: string) {
+  const normalized = String(status ?? "").toLowerCase();
+  switch (normalized) {
+    case "approved":
+    case "paid":
+    case "success":
+      return "completed";
+    case "cancelled":
+    case "canceled":
+    case "rejected":
+    case "failed":
+    case "refused":
+    case "chargeback":
+      return "failed";
+    default:
+      return "pending";
+  }
+}
+
+export function mapAuthorizedPaymentStatusToSubscriptionStatus(
+  status?: string,
+) {
+  const normalized = String(status ?? "").toLowerCase();
+  switch (normalized) {
+    case "approved":
+    case "paid":
+    case "success":
+      return "active";
+    case "cancelled":
+    case "canceled":
+      return "canceled";
+    case "rejected":
+    case "failed":
+    case "refused":
+    case "chargeback":
+      return "failed";
+    default:
+      return "authorized";
+  }
+}
