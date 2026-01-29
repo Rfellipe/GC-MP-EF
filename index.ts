@@ -206,11 +206,33 @@ serve(async (req) => {
       }
 
       const mappedStatus = mapMpSubscriptionStatus(sub.status);
+      const planTier = getMeta(metadata, ["planTier", "plan_tier", "tier"]) as
+        | string
+        | null;
+      const planPrice = getMeta(metadata, ["amount", "price"]) as
+        | number
+        | string
+        | null;
+      const planStart = getMeta(metadata, ["start_date", "started_at"]) as
+        | string
+        | null;
+      const planEnd = getMeta(metadata, ["end_date", "expires_at"]) as
+        | string
+        | null;
       const mergedMetadata = {
         ...(subscription.metadata ?? {}),
         mp_preapproval: sub,
         mp_reason: sub.reason ?? null,
         mp_next_payment_date: sub.next_payment_date ?? null,
+      };
+      const planUpdates = {
+        tier: planTier ?? subscription.tier,
+        price:
+          planPrice !== null && planPrice !== undefined && planPrice !== ""
+            ? Number(planPrice)
+            : subscription.price,
+        started_at: planStart ?? subscription.started_at,
+        expires_at: planEnd ?? subscription.expires_at,
       };
 
       const updated = await updateSubscription(subscription.id, {
@@ -218,6 +240,7 @@ serve(async (req) => {
         external_reference: externalReference ?? subscription.external_reference,
         status: mappedStatus ?? subscription.status,
         metadata: mergedMetadata,
+        ...planUpdates,
       });
 
       const updatedRows = await updateSubscriptionsByReference({
@@ -229,6 +252,7 @@ serve(async (req) => {
             externalReference ?? subscription.external_reference,
           status: mappedStatus ?? subscription.status,
           metadata: mergedMetadata,
+          ...planUpdates,
         },
       });
 
