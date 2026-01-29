@@ -206,13 +206,26 @@ serve(async (req) => {
       }
 
       const mappedStatus = mapMpSubscriptionStatus(sub.status);
-      const planTier = getMeta(metadata, ["planTier", "plan_tier", "tier"]) as
-        | string
-        | null;
-      const planPrice = getMeta(metadata, ["amount", "price"]) as
-        | number
-        | string
-        | null;
+      const planTierFromMetadata = getMeta(metadata, [
+        "planTier",
+        "plan_tier",
+        "tier",
+      ]) as string | null;
+      const planTierFromReason = String(sub.reason ?? "")
+        .toLowerCase()
+        .includes("elite")
+        ? "elite"
+        : String(sub.reason ?? "").toLowerCase().includes("premium")
+          ? "premium"
+          : String(sub.reason ?? "").toLowerCase().includes("basic")
+            ? "basic"
+            : String(sub.reason ?? "").toLowerCase().includes("free")
+              ? "free"
+              : null;
+      const planTier = planTierFromMetadata ?? planTierFromReason;
+      const planPrice =
+        (getMeta(metadata, ["amount", "price"]) as number | string | null) ??
+        (sub.auto_recurring?.transaction_amount ?? null);
       const planStart = getMeta(metadata, ["start_date", "started_at"]) as
         | string
         | null;
