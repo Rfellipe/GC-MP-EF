@@ -232,27 +232,66 @@ serve(async (req) => {
       const planEnd = getMeta(metadata, ["end_date", "expires_at"]) as
         | string
         | null;
+      const tierRank: Record<string, number> = {
+        free: 0,
+        basic: 1,
+        premium: 2,
+        elite: 3,
+      };
+      const currentRank = tierRank[String(subscription.tier ?? "")] ?? null;
+      const incomingRank = planTier ? tierRank[String(planTier)] ?? null : null;
+      const isDowngrade =
+        currentRank !== null &&
+        incomingRank !== null &&
+        incomingRank < currentRank;
+
+      const normalizedPlanPrice =
+        planPrice !== null && planPrice !== undefined && planPrice !== ""
+          ? Number(planPrice)
+          : null;
+      const resolvedPrice =
+        normalizedPlanPrice !== null && !Number.isNaN(normalizedPlanPrice)
+          ? normalizedPlanPrice
+          : subscription.price;
+
+      const baseMetadata = subscription.metadata ?? {};
       const mergedMetadata = {
-        ...(subscription.metadata ?? {}),
+        ...baseMetadata,
         mp_preapproval: sub,
         mp_reason: sub.reason ?? null,
         mp_next_payment_date: sub.next_payment_date ?? null,
       };
-      const planUpdates = {
-        tier: planTier ?? subscription.tier,
-        price:
-          planPrice !== null && planPrice !== undefined && planPrice !== ""
-            ? Number(planPrice)
-            : subscription.price,
-        started_at: planStart ?? subscription.started_at,
-        expires_at: planEnd ?? subscription.expires_at,
-      };
+
+      const pendingPlan = isDowngrade
+        ? {
+            tier: planTier ?? subscription.tier,
+            price: resolvedPrice,
+            start_at: planStart ?? subscription.expires_at,
+            end_at: planEnd ?? null,
+          }
+        : null;
+
+      const nextMetadata = pendingPlan
+        ? {
+            ...mergedMetadata,
+            pending_plan: pendingPlan,
+          }
+        : mergedMetadata;
+
+      const planUpdates = pendingPlan
+        ? {}
+        : {
+            tier: planTier ?? subscription.tier,
+            price: resolvedPrice,
+            started_at: planStart ?? subscription.started_at,
+            expires_at: planEnd ?? subscription.expires_at,
+          };
 
       const updated = await updateSubscription(subscription.id, {
         preapproval_id: preapprovalId,
         external_reference: externalReference ?? subscription.external_reference,
         status: mappedStatus ?? subscription.status,
-        metadata: mergedMetadata,
+        metadata: nextMetadata,
         ...planUpdates,
       });
 
@@ -264,7 +303,7 @@ serve(async (req) => {
           external_reference:
             externalReference ?? subscription.external_reference,
           status: mappedStatus ?? subscription.status,
-          metadata: mergedMetadata,
+          metadata: nextMetadata,
           ...planUpdates,
         },
       });
@@ -272,6 +311,7 @@ serve(async (req) => {
       console.log("Subscription updated (preapproval):", updated.id, {
         status: updated.status,
         preapproval_id: updated.preapproval_id,
+        downgrade_scheduled: isDowngrade,
         updated_rows: updatedRows.length,
       });
 
