@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { verifyMercadoPagoSignature } from "./crypto.ts";
 import {
   getSubscriptionByReference,
+  updateSubscriptionsByReference,
   getTransactionByExternalReference,
   getTransactionById,
   insertTransaction,
@@ -219,9 +220,22 @@ serve(async (req) => {
         metadata: mergedMetadata,
       });
 
+      const updatedRows = await updateSubscriptionsByReference({
+        preapprovalId,
+        externalReference: externalReference ?? subscription.external_reference,
+        updates: {
+          preapproval_id: preapprovalId,
+          external_reference:
+            externalReference ?? subscription.external_reference,
+          status: mappedStatus ?? subscription.status,
+          metadata: mergedMetadata,
+        },
+      });
+
       console.log("Subscription updated (preapproval):", updated.id, {
         status: updated.status,
         preapproval_id: updated.preapproval_id,
+        updated_rows: updatedRows.length,
       });
 
       return new Response("OK", { status: 200 });

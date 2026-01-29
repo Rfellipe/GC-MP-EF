@@ -72,6 +72,30 @@ export async function updateSubscription(
   return data as SubscriptionRow;
 }
 
+export async function updateSubscriptionsByReference(args: {
+  preapprovalId?: string | null;
+  externalReference?: string | null;
+  updates: Partial<SubscriptionRow>;
+}) {
+  const conditions: string[] = [];
+  if (args.preapprovalId) {
+    conditions.push(`preapproval_id.eq.${args.preapprovalId}`);
+  }
+  if (args.externalReference) {
+    conditions.push(`external_reference.eq.${args.externalReference}`);
+    conditions.push(`id.eq.${args.externalReference}`);
+  }
+  if (conditions.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .update(args.updates)
+    .or(conditions.join(","))
+    .select();
+  if (error) throw error;
+  return data as SubscriptionRow[];
+}
+
 // ========= transactions =========
 export async function getTransactionById(id: string) {
   const { data, error } = await supabase
