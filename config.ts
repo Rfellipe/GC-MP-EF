@@ -8,6 +8,7 @@ export const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get(
 export const MP_ACCESS_TOKEN = Deno.env.get("MERCADO_PAGO_ACCESS_TOKEN")!;
 export const MP_WEBHOOK_SECRET =
   Deno.env.get("MERCADO_PAGO_WEBHOOK_SECRET") || "";
+export const CRON_SECRET = Deno.env.get("CRON_SECRET") || "";
 
 // Supabase client with service role (bypasses RLS)
 export const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {

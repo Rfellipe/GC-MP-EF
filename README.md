@@ -16,6 +16,10 @@ Supported topics:
 - `subscription_prepapproval`
 - `subscription_authorized_payment`
 
+Additional function:
+
+- `apply_pending_downgrades` (cron/scheduled): applies `metadata.pending_plan` when `start_at` is reached.
+
 ## Environment variables
 
 Configure these in the Supabase Edge Function environment:
@@ -36,6 +40,22 @@ The function expects these tables/functions:
   - `p_product_id`
   - `p_target_profile_id`
   - `p_metadata`
+
+For scheduled downgrades (Option B), store a pending plan inside `subscriptions.metadata`:
+
+```json
+{
+  "pending_plan": {
+    "tier": "basic",
+    "price": 99.9,
+    "start_at": "2026-03-28T00:00:00Z",
+    "end_at": "2026-04-28T00:00:00Z"
+  }
+}
+```
+
+The `apply_pending_downgrades` function scans for pending plans with `start_at <= now()` and moves
+those values into `tier`, `price`, `started_at`, and `expires_at`, removing `pending_plan` after the update.
 
 ## Metadata expectations
 
