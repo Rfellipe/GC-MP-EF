@@ -6,6 +6,7 @@ import {
   getTransactionByExternalReference,
   getTransactionById,
   insertTransaction,
+  updateTransaction,
   updateSubscription,
 } from "./db.ts";
 import {
@@ -65,8 +66,8 @@ serve(async (req) => {
       const mpAmount = payment.transaction_amount;
       const mpExternalRef = payment.external_reference;
 
-      if (isCardValidation || (Number(mpAmount ?? 0) === 0 && !mpExternalRef)) {
-        console.log("Ignoring card validation payment", {
+      if (!isCardValidation && Number(mpAmount ?? 0) === 0 && !mpExternalRef) {
+        console.log("Ignoring zero-amount payment without reference", {
           payment_id: payment.id,
           operation_type: operationType,
         });
@@ -93,14 +94,6 @@ serve(async (req) => {
         | string
         | null;
 
-      if (!walletId) {
-        console.warn("Payment metadata missing walletId, ignoring payment", {
-          metadata,
-          payment_id: mpPaymentId,
-        });
-        return new Response("Ignored", { status: 200 });
-      }
-
       const txStatus = mapPaymentStatusToTransactionStatus(mpStatus);
       const txType = mapServiceTypeToTransactionType(serviceType ?? undefined);
       const txMethod = mapPaymentMethod(metadataMethod, payment);
@@ -126,8 +119,42 @@ serve(async (req) => {
         metadata: payment,
       };
 
-      const existingTx = await getTransactionByExternalReference(txExternalRef);
-      const tx = existingTx ?? (await insertTransaction(transactionRow));
+      const externalReferenceCandidates = [
+        mpExternalRef,
+        getMeta(metadata, ["externalReference", "external_reference"]),
+        String(mpPaymentId),
+      ].filter((value): value is string => Boolean(value));
+
+      let existingTx = null;
+      for (const candidate of externalReferenceCandidates) {
+        existingTx = await getTransactionByExternalReference(candidate);
+        if (existingTx) break;
+      }
+
+      const tx = existingTx
+        ? await updateTransaction(existingTx.id, {
+            status: txStatus,
+            method: txMethod,
+            amount: mpAmount,
+            description,
+            external_reference:
+              existingTx.external_reference ?? txExternalRef ?? null,
+            metadata: payment,
+            updated_at: new Date().toISOString(),
+          })
+        : walletId
+          ? await insertTransaction(transactionRow)
+          : null;
+
+      if (!tx) {
+        console.warn("Payment missing walletId; unable to store transaction", {
+          payment_id: mpPaymentId,
+          metadata,
+          is_card_validation: isCardValidation,
+        });
+        return new Response("Ignored", { status: 200 });
+      }
+
       console.log("Transaction stored (payment):", tx.id);
 
       if (txStatus === "completed") {

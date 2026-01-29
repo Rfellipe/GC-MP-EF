@@ -21,6 +21,8 @@ export async function getSubscriptionByPreapprovalId(preapprovalId: string) {
     .from("subscriptions")
     .select("*")
     .eq("preapproval_id", preapprovalId)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (error) throw error;
   return data as SubscriptionRow | null;
@@ -33,6 +35,8 @@ export async function getSubscriptionByExternalReference(
     .from("subscriptions")
     .select("*")
     .or(`external_reference.eq.${externalReference},id.eq.${externalReference}`)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (error) throw error;
   return data as SubscriptionRow | null;
@@ -100,4 +104,18 @@ export async function insertTransaction(transactionRow: any) {
 
   if (txErr || !tx) throw txErr ?? new Error("Failed to insert transaction");
   return tx;
+}
+
+export async function updateTransaction(
+  id: string,
+  updates: Record<string, unknown>,
+) {
+  const { data, error } = await supabase
+    .from("transactions")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
