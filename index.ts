@@ -109,6 +109,13 @@ serve(async (req) => {
         getMeta(metadata, ["externalReference", "external_reference"]) ??
         String(mpPaymentId);
 
+      const cardLastFour = payment?.card?.last_four_digits ?? null;
+      const cardBrand =
+        payment?.payment_method_id ??
+        payment?.payment_method?.id ??
+        payment?.card?.brand ??
+        null;
+
       const transactionRow = {
         wallet_id: walletId,
         type: txType,
@@ -157,6 +164,30 @@ serve(async (req) => {
       }
 
       console.log("Transaction stored (payment):", tx.id);
+
+      if (txMethod === "card" && (cardLastFour || cardBrand)) {
+        const subscription = await getSubscriptionByReference({
+          preapprovalId: getMeta(metadata, ["preapproval_id", "preapprovalId"]),
+          externalReference: getMeta(metadata, [
+            "externalReference",
+            "external_reference",
+            "subscription_id",
+            "subscriptionId",
+          ]),
+        });
+
+        if (subscription) {
+          const nextMetadata = {
+            ...(subscription.metadata ?? {}),
+            mp_card: {
+              ...(subscription.metadata?.mp_card ?? {}),
+              brand: cardBrand,
+              last_four_digits: cardLastFour,
+            },
+          };
+          await updateSubscription(subscription.id, { metadata: nextMetadata });
+        }
+      }
 
       if (txStatus === "completed") {
         if (!productId || !targetProfileId) {
@@ -255,11 +286,21 @@ serve(async (req) => {
           : subscription.price;
 
       const baseMetadata = subscription.metadata ?? {};
+      const mpCardSummary = {
+        card_id: sub.card_id ?? null,
+        payment_method_id: sub.payment_method_id ?? null,
+        payment_method_id_secondary: sub.payment_method_id_secondary ?? null,
+        payer_id: sub.payer_id ?? null,
+      };
+      const hasCardSummary = Object.values(mpCardSummary).some(
+        (value) => value !== null && value !== undefined && value !== "",
+      );
       const mergedMetadata = {
         ...baseMetadata,
         mp_preapproval: sub,
         mp_reason: sub.reason ?? null,
         mp_next_payment_date: sub.next_payment_date ?? null,
+        ...(hasCardSummary ? { mp_card: mpCardSummary } : {}),
       };
 
       const pendingPlan = isDowngrade
