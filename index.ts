@@ -109,6 +109,13 @@ serve(async (req) => {
         getMeta(metadata, ["externalReference", "external_reference"]) ??
         String(mpPaymentId);
 
+      const cardLastFour = payment?.card?.last_four_digits ?? null;
+      const cardBrand =
+        payment?.payment_method_id ??
+        payment?.payment_method?.id ??
+        payment?.card?.brand ??
+        null;
+
       const transactionRow = {
         wallet_id: walletId,
         type: txType,
@@ -157,6 +164,30 @@ serve(async (req) => {
       }
 
       console.log("Transaction stored (payment):", tx.id);
+
+      if (txMethod === "card" && (cardLastFour || cardBrand)) {
+        const subscription = await getSubscriptionByReference({
+          preapprovalId: getMeta(metadata, ["preapproval_id", "preapprovalId"]),
+          externalReference: getMeta(metadata, [
+            "externalReference",
+            "external_reference",
+            "subscription_id",
+            "subscriptionId",
+          ]),
+        });
+
+        if (subscription) {
+          const nextMetadata = {
+            ...(subscription.metadata ?? {}),
+            mp_card: {
+              ...(subscription.metadata?.mp_card ?? {}),
+              brand: cardBrand,
+              last_four_digits: cardLastFour,
+            },
+          };
+          await updateSubscription(subscription.id, { metadata: nextMetadata });
+        }
+      }
 
       if (txStatus === "completed") {
         if (!productId || !targetProfileId) {
