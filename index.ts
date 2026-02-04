@@ -2,16 +2,20 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { verifyMercadoPagoSignature } from "./crypto.ts";
 import {
-  applyCatalogPurchaseOrThrow,
-  getMpSubscriptionMapByPreapprovalId,
-  upsertMpSubscriptionMap,
-  upsertTransactionByExternalRef,
+  getSubscriptionByReference,
+  getTransactionByExternalReference,
+  getTransactionById,
+  insertTransaction,
+  updateSubscription,
 } from "./db.ts";
 import {
   getMeta,
   mapPaymentMethod,
   mapPaymentStatusToTransactionStatus,
   mapServiceTypeToTransactionType,
+  mapAuthorizedPaymentStatusToSubscriptionStatus,
+  mapAuthorizedPaymentStatusToTransactionStatus,
+  mapMpSubscriptionStatus,
 } from "./mapping.ts";
 import { buildMercadoPagoResourcePath, fetchMpResource } from "./mp.ts";
 
@@ -56,11 +60,21 @@ serve(async (req) => {
     // =========================================================
     if (topic === "payment") {
       const payment = resource;
+      const operationType = String(payment.operation_type ?? "").toLowerCase();
+      const isCardValidation = operationType === "card_validation";
+      const mpAmount = payment.transaction_amount;
+      const mpExternalRef = payment.external_reference;
+
+      if (isCardValidation || (Number(mpAmount ?? 0) === 0 && !mpExternalRef)) {
+        console.log("Ignoring card validation payment", {
+          payment_id: payment.id,
+          operation_type: operationType,
+        });
+        return new Response("Ignored", { status: 200 });
+      }
 
       const mpStatus = payment.status;
       const mpDescription = payment.description;
-      const mpAmount = payment.transaction_amount;
-      const mpExternalRef = payment.external_reference;
       const mpPaymentId = payment.id;
 
       const metadata = payment.metadata || {};
@@ -80,11 +94,11 @@ serve(async (req) => {
         | null;
 
       if (!walletId) {
-        console.error("Payment metadata missing walletId", {
+        console.warn("Payment metadata missing walletId, ignoring payment", {
           metadata,
           payment_id: mpPaymentId,
         });
-        return new Response("No walletId in metadata", { status: 400 });
+        return new Response("Ignored", { status: 200 });
       }
 
       const txStatus = mapPaymentStatusToTransactionStatus(mpStatus);
@@ -112,8 +126,9 @@ serve(async (req) => {
         metadata: payment,
       };
 
-      const tx = await upsertTransactionByExternalRef(transactionRow);
-      console.log("Transaction upserted (payment):", tx.id);
+      const existingTx = await getTransactionByExternalReference(txExternalRef);
+      const tx = existingTx ?? (await insertTransaction(transactionRow));
+      console.log("Transaction stored (payment):", tx.id);
 
       if (txStatus === "completed") {
         if (!productId || !targetProfileId) {
@@ -124,14 +139,11 @@ serve(async (req) => {
           return new Response("Missing product_id/profile_id", { status: 400 });
         }
 
-        const applied = await applyCatalogPurchaseOrThrow({
+        console.log("Payment completed with catalog metadata", {
           transaction_id: tx.id,
           product_id: productId,
           target_profile_id: targetProfileId,
-          metadata,
         });
-
-        console.log("Purchase applied (payment):", applied);
       }
 
       return new Response("OK", { status: 200 });
@@ -146,35 +158,47 @@ serve(async (req) => {
       const metadata = sub.metadata || sub?.auto_recurring?.metadata || {};
 
       const preapprovalId = String(sub.id ?? dataId);
+      const externalReference =
+        String(
+          getMeta(sub, ["external_reference", "externalReference"]) ??
+            getMeta(metadata, ["external_reference", "externalReference"]) ??
+            "",
+        ) || null;
 
-      const productId =
-        getMeta(metadata, ["product_id", "productId"]) ??
-        getMeta(sub, ["external_reference"]); // fallback only
+      const subscription = await getSubscriptionByReference({
+        preapprovalId,
+        externalReference,
+      });
+      if (!subscription) {
+        console.error("Subscription not found for preapproval", {
+          preapprovalId,
+          externalReference,
+        });
+        return new Response("Subscription not found", { status: 404 });
+      }
 
-      const profileId = getMeta(metadata, ["profile_id", "profileId"]) as
-        | string
-        | null;
-      const walletId = getMeta(metadata, ["wallet_id", "walletId"]) as
-        | string
-        | null;
+      const mappedStatus = mapMpSubscriptionStatus(sub.status);
+      const mergedMetadata = {
+        ...(subscription.metadata ?? {}),
+        mp_preapproval: sub,
+        mp_reason: sub.reason ?? null,
+        mp_next_payment_date: sub.next_payment_date ?? null,
+        mp_card_id: sub.card_id ?? null,
+        mp_payment_method_id: sub.payment_method_id ?? null,
+        mp_payment_method_id_secondary: sub.payment_method_id_secondary ?? null,
+      };
 
-      // In subscriptions, it’s common to have payer_id somewhere; keep it if present
-      const payerId = String(sub?.payer_id ?? sub?.payer?.id ?? "") || null;
-
-      const map = await upsertMpSubscriptionMap({
+      const updated = await updateSubscription(subscription.id, {
         preapproval_id: preapprovalId,
-        status: String(sub.status ?? "") || null,
-        payer_id: payerId,
-        reason: String(sub.reason ?? "") || null,
-        external_reference: String(sub.external_reference ?? "") || null,
-        product_id: productId ? String(productId) : null,
-        profile_id: profileId ? String(profileId) : null,
-        wallet_id: walletId ? String(walletId) : null,
-        metadata,
-        raw: sub,
+        external_reference: externalReference ?? subscription.external_reference,
+        status: mappedStatus ?? subscription.status,
+        metadata: mergedMetadata,
       });
 
-      console.log("Subscription map upserted:", map.preapproval_id, map.status);
+      console.log("Subscription updated (preapproval):", updated.id, {
+        status: updated.status,
+        preapproval_id: updated.preapproval_id,
+      });
 
       return new Response("OK", { status: 200 });
     }
@@ -194,8 +218,13 @@ serve(async (req) => {
             invoice.preapproval?.id ??
             "",
         ) || null;
+      const externalReference =
+        String(
+          getMeta(invoice, ["external_reference", "externalReference"]) ?? "",
+        ) || null;
+      const subscriptionRef = preapprovalId ?? externalReference ?? "unknown";
 
-      if (!preapprovalId) {
+      if (!preapprovalId && !externalReference) {
         console.error(
           "Authorized payment missing preapproval/subscription id",
           { invoice },
@@ -203,21 +232,20 @@ serve(async (req) => {
         return new Response("Missing preapproval_id", { status: 400 });
       }
 
-      const map = await getMpSubscriptionMapByPreapprovalId(preapprovalId);
-      if (!map) {
+      const subscription = await getSubscriptionByReference({
+        preapprovalId,
+        externalReference,
+      });
+      if (!subscription) {
         console.error(
           "No subscriptions mapping found for preapproval_id",
-          preapprovalId,
+          subscriptionRef,
         );
         return new Response("No subscription mapping", { status: 400 });
       }
 
-      // Decide tx status: treat "approved/paid" as completed; everything else pending
       const invStatus = String(invoice.status ?? "").toLowerCase();
-      const completedStatuses = new Set(["approved", "paid", "success"]);
-      const txStatus = completedStatuses.has(invStatus)
-        ? "completed"
-        : "pending";
+      const txStatus = mapAuthorizedPaymentStatusToTransactionStatus(invStatus);
 
       // Amount/currency: best-effort fields
       const amount = Number(
@@ -232,27 +260,18 @@ serve(async (req) => {
       const txExternalRef = `mp_authorized_payment_${invoiceId}`;
 
       // Wallet id must come from mapping (recommended) or invoice metadata
-      const walletId = map.wallet_id ?? null;
+      const baseTransaction = subscription.transaction_id
+        ? await getTransactionById(subscription.transaction_id)
+        : null;
+      const walletId = baseTransaction?.wallet_id ?? null;
       if (!walletId) {
         console.error(
           "Subscription mapping missing wallet_id; cannot create transaction",
-          { map },
+          { subscriptionId: subscription.id },
         );
         return new Response("Missing wallet_id in subscription map", {
           status: 400,
         });
-      }
-
-      const productId = map.product_id ?? null;
-      const targetProfileId = map.profile_id ?? null;
-      if (!productId || !targetProfileId) {
-        console.error("Subscription mapping missing product_id/profile_id", {
-          map,
-        });
-        return new Response(
-          "Missing product_id/profile_id in subscription map",
-          { status: 400 },
-        );
       }
 
       const transactionRow = {
@@ -262,36 +281,53 @@ serve(async (req) => {
         amount,
         status: txStatus,
         external_reference: txExternalRef,
-        description: `Subscription renewal (${preapprovalId})`,
+        description: `Subscription renewal (${subscriptionRef})`,
         metadata: {
           kind: "subscription_authorized_payment",
           preapproval_id: preapprovalId,
           invoice,
-          map,
+          subscription_id: subscription.id,
         },
       };
 
-      const tx = await upsertTransactionByExternalRef(transactionRow);
-      console.log("Transaction upserted (authorized payment):", tx.id);
+      const existingTx = await getTransactionByExternalReference(txExternalRef);
+      const tx = existingTx ?? (await insertTransaction(transactionRow));
+      console.log("Transaction stored (authorized payment):", tx.id);
 
-      if (txStatus === "completed") {
-        // Merge metadata from map with invoice info
-        const mergedMetadata = {
-          ...(map.metadata ?? {}),
-          preapproval_id: preapprovalId,
-          authorized_payment_id: invoiceId,
-          invoice_status: invStatus,
-        };
+      const subscriptionStatus =
+        mapAuthorizedPaymentStatusToSubscriptionStatus(invStatus);
+      const mergedMetadata = {
+        ...(subscription.metadata ?? {}),
+        last_authorized_payment_id: invoiceId,
+        last_authorized_payment_status: invStatus,
+        last_authorized_payment_at:
+          invoice.date_created ?? invoice.date_last_updated ?? null,
+        mp_card_id: invoice.card_id ?? subscription.metadata?.mp_card_id ?? null,
+        mp_payment_method_id:
+          invoice.payment_method_id ??
+          subscription.metadata?.mp_payment_method_id ??
+          null,
+      };
+      const shouldExtend =
+        txStatus === "completed" && subscription.status !== "canceled";
+      const currentExpiry = subscription.expires_at
+        ? new Date(subscription.expires_at)
+        : new Date();
+      const nextExpiry = shouldExtend
+        ? new Date(
+            currentExpiry.setMonth(
+              currentExpiry.getMonth() +
+                Number(invoice?.auto_recurring?.frequency ?? 1),
+            ),
+          )
+        : subscription.expires_at ?? null;
 
-        const applied = await applyCatalogPurchaseOrThrow({
-          transaction_id: tx.id,
-          product_id: productId,
-          target_profile_id: targetProfileId,
-          metadata: mergedMetadata,
-        });
-
-        console.log("Purchase applied (authorized payment):", applied);
-      }
+      await updateSubscription(subscription.id, {
+        status: subscriptionStatus ?? subscription.status,
+        metadata: mergedMetadata,
+        transaction_id: tx.id,
+        expires_at: nextExpiry ? new Date(nextExpiry).toISOString() : null,
+      });
 
       return new Response("OK", { status: 200 });
     }
