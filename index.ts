@@ -255,11 +255,21 @@ serve(async (req) => {
           : subscription.price;
 
       const baseMetadata = subscription.metadata ?? {};
+      const mpCardSummary = {
+        card_id: sub.card_id ?? null,
+        payment_method_id: sub.payment_method_id ?? null,
+        payment_method_id_secondary: sub.payment_method_id_secondary ?? null,
+        payer_id: sub.payer_id ?? null,
+      };
+      const hasCardSummary = Object.values(mpCardSummary).some(
+        (value) => value !== null && value !== undefined && value !== "",
+      );
       const mergedMetadata = {
         ...baseMetadata,
         mp_preapproval: sub,
         mp_reason: sub.reason ?? null,
         mp_next_payment_date: sub.next_payment_date ?? null,
+        ...(hasCardSummary ? { mp_card: mpCardSummary } : {}),
       };
 
       const pendingPlan = isDowngrade
