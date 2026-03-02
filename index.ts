@@ -293,6 +293,66 @@ serve(async (req) => {
         normalizedPlanPrice !== null && !Number.isNaN(normalizedPlanPrice)
           ? normalizedPlanPrice
           : subscription.price;
+      const normalizedSubStatus = String(sub.status ?? "").toLowerCase();
+      const preapprovalTxStatus =
+        normalizedSubStatus === "authorized" ||
+          normalizedSubStatus === "approved" ||
+          normalizedSubStatus === "active"
+          ? "completed"
+          : normalizedSubStatus === "cancelled" ||
+              normalizedSubStatus === "canceled"
+            ? "cancelled"
+            : normalizedSubStatus === "rejected" ||
+                normalizedSubStatus === "expired"
+              ? "failed"
+              : "pending";
+
+      const subscriptionTx =
+        (subscription.transaction_id
+          ? await getTransactionById(subscription.transaction_id)
+          : null) ??
+        (externalReference
+          ? await getTransactionByExternalReference(externalReference)
+          : null);
+
+      if (subscriptionTx) {
+        const mergedTxMetadata = {
+          ...(subscriptionTx.metadata ?? {}),
+          mp_preapproval_id: preapprovalId,
+          mp_preapproval_status: normalizedSubStatus,
+          currency: sub.auto_recurring?.currency_id ?? null,
+        };
+
+        await updateTransaction(subscriptionTx.id, {
+          status: preapprovalTxStatus,
+          method: subscriptionTx.method ?? "card",
+          amount:
+            resolvedPrice !== null &&
+              resolvedPrice !== undefined &&
+              !Number.isNaN(Number(resolvedPrice))
+              ? Number(resolvedPrice)
+              : subscriptionTx.amount,
+          external_reference:
+            subscriptionTx.external_reference ?? externalReference ?? null,
+          metadata: mergedTxMetadata,
+          updated_at: new Date().toISOString(),
+        });
+
+        console.log("Transaction synced from preapproval:", subscriptionTx.id, {
+          status: preapprovalTxStatus,
+          subscription_id: subscription.id,
+          external_reference: externalReference,
+        });
+      } else {
+        console.warn(
+          "No transaction mapping found for preapproval; referral trigger will not run",
+          {
+            subscription_id: subscription.id,
+            preapproval_id: preapprovalId,
+            external_reference: externalReference,
+          },
+        );
+      }
 
       const baseMetadata = subscription.metadata ?? {};
       const mpCardSummary = {
